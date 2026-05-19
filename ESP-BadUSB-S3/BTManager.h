@@ -11,7 +11,10 @@ void setupBT();
 void loopBT();
 void stopBT();
 void scanBT();
+bool btScanInProgress();
 bool isBTDevicePresent(String name);
 int getBTClientCount();
+void stopBTAdvertising();
+void startBTAdvertising();
 
 #endif // BT_MANAGER_H

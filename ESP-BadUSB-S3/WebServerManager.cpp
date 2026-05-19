@@ -617,14 +617,29 @@ void setupWebServer() {
   // Returns: {"done": false, "networks": []}  while scanning
   //          {"done": true,  "networks": [{ssid,rssi},...]} when complete
   server.on("/api/scan-results", []() {
-    bool done = wifiScanComplete();
+    int n = WiFi.scanComplete();
+    bool done = (n >= 0);
     String json = "{\"done\":" + String(done ? "true" : "false") + ",\"networks\":[";
     if (done) {
-      for (size_t i = 0; i < availableSSIDs.size(); i++) {
+      std::vector<String> savedSSIDs = getSavedSSIDs();
+      for (int i = 0; i < n; i++) {
         if (i > 0) json += ",";
-        json += "{\"ssid\":\"" + availableSSIDs[i] + "\",\"rssi\":0}";
+        String ssid = WiFi.SSID(i);
+        bool isSaved = false;
+        for (const String& s : savedSSIDs) {
+          if (s == ssid) { isSaved = true; break; }
+        }
+
+        json += "{";
+        json += "\"ssid\":\"" + ssid + "\",";
+        json += "\"bssid\":\"" + WiFi.BSSIDstr(i) + "\",";
+        json += "\"channel\":" + String(WiFi.channel(i)) + ",";
+        json += "\"rssi\":" + String(WiFi.RSSI(i)) + ",";
+        json += "\"encryption\":" + String(WiFi.encryptionType(i)) + ",";
+        json += "\"saved\":" + String(isSaved ? "true" : "false");
+        json += "}";
       }
-      logDebug("HTTP: /api/scan-results — done, " + String(availableSSIDs.size()) + " networks");
+      logDebug("HTTP: /api/scan-results — done, " + String(n) + " networks");
     }
     json += "]}";
     server.send(200, "application/json", json);

@@ -159,11 +159,8 @@ void handleJoinInternet() {
     String password = server.arg("password");
     joinWiFi(ssid, password);
     
-    if (WiFi.status() == WL_CONNECTED) {
-      server.send(200, "application/json", "{\"success\":true,\"message\":\"Connected to WiFi: " + ssid + "\",\"ip\":\"" + WiFi.localIP().toString() + "\"}");
-    } else {
-      server.send(500, "application/json", "{\"success\":false,\"message\":\"Failed to connect to WiFi: " + ssid + "\"}");
-    }
+    // Return success since it's started in the background
+    server.send(200, "application/json", "{\"success\":true,\"message\":\"Connecting to WiFi: " + ssid + "...\"}");
   } else {
     server.send(400, "text/plain", "Missing SSID or password");
   }

@@ -9,7 +9,6 @@ Preferences preferences;
 // WiFi & AP
 String ap_ssid = DEFAULT_AP_SSID;
 String ap_password = DEFAULT_AP_PASSWORD;
-std::vector<String> availableSSIDs;
 int wifiScanTime = WIFI_SCAN_TIMEOUT;
 bool autoConnectEnabled = false;
 bool saveOnConnectEnabled = false;

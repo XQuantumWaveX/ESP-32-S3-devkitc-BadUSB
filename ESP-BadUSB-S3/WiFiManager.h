@@ -3,6 +3,7 @@
 
 #include "GlobalState.h"
 #include <WiFi.h>
+#include <vector>
 
 void setupAP();
 void stopAP();
@@ -20,6 +21,7 @@ String makeHttpRequest(String url);
 void saveWiFiCredentials(String ssid, String pass);
 void processAutoConnect();
 String getSavedWiFiCredentials();
+std::vector<String> getSavedSSIDs();
 void deleteWiFiCredential(String ssid);
 
 #endif // WIFI_MANAGER_H

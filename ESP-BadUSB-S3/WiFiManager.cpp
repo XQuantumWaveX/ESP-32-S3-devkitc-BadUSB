@@ -1,5 +1,6 @@
 #include "WiFiManager.h"
 #include "LogManager.h"
+#include "BTManager.h"
 #include <HTTPClient.h>
 
 // ============================================================
@@ -10,15 +11,19 @@ void setupAP() {
   WiFi.mode(WIFI_AP_STA);
   delay(100);
 
-  if (!WiFi.softAP(ap_ssid.c_str(), ap_password.c_str())) {
+  // Lower TX power slightly to improve stability and reduce power spikes
+  WiFi.setTxPower(WIFI_POWER_15dBm);
+
+  // Fix AP to channel 1. Specify max connections to reduce overhead.
+  if (!WiFi.softAP(ap_ssid.c_str(), ap_password.c_str(), 1, 0, 4)) {
     Serial.println("[WiFi] Failed to setup AP with password — trying open AP");
-    WiFi.softAP(ap_ssid.c_str());
+    WiFi.softAP(ap_ssid.c_str(), "", 1, 0, 4);
   }
 
   IPAddress IP = WiFi.softAPIP();
   Serial.print("[WiFi] AP started. IP: ");
   Serial.println(IP);
-  logDebug("AP started, IP: " + IP.toString() + ", SSID: " + ap_ssid);
+  logDebug("AP started, IP: " + IP.toString() + ", SSID: " + ap_ssid + " (Ch 1)");
 }
 
 void stopAP() {
@@ -30,34 +35,52 @@ void stopAP() {
 // ============================================================
 // Async WiFi Scan — safe to run while AP is active (AP_STA mode)
 // ============================================================
-static bool wifiScanStarted = false;
+// Mirror Wifi-Cloner: use a volatile flag so it's safe across interrupt/loop context
+volatile static bool wifiScanStarted = false;
 static unsigned long wifiScanStartedAt = 0;
 
 void startWiFiScan() {
-  if (wifiScanStarted || WiFi.scanComplete() == WIFI_SCAN_RUNNING) {
-    Serial.println("[WiFi] Scan already in progress, skipping");
+  // Guard 1: don't double-start
+  if (wifiScanStarted) {
+    Serial.println("[WiFi] Scan already flagged in progress, skipping");
+    return;
+  }
+  // Guard 2: check the driver too
+  if (WiFi.scanComplete() == WIFI_SCAN_RUNNING) {
+    Serial.println("[WiFi] Driver reports scan running, skipping");
+    return;
+  }
+  // Guard 3: BT conflict
+  if (btScanInProgress()) {
+    Serial.println("[WiFi] BT scan active — deferring WiFi scan");
     return;
   }
 
-  // Delete any stale scan results first
+  // Allow the Web Server to finish sending the 202 response before we hijack the radio
+  delay(200);
+
+  // STOP Bluetooth advertising during WiFi scan
+  stopBTAdvertising();
+
   WiFi.scanDelete();
-  
-  // Use async scan. 
-  // Note: On ESP32, if SoftAP is active, scanning may cause temporary disconnection of clients
-  // but it shouldn't crash if we are in WIFI_AP_STA mode and don't toggle modes.
-  int result = WiFi.scanNetworks(/*async=*/true, /*show_hidden=*/true);
-  
+  wifiScanStarted = true;
+  wifiScanStartedAt = millis();
+
+  // Trigger PASSIVE scan (quieter) with shorter channel time (110ms)
+  // This prevents the AP from being "gone" for too long and dropping clients.
+  int result = WiFi.scanNetworks(/*async=*/true, /*show_hidden=*/false, /*passive=*/true, /*max_ms_per_chan=*/110);
+
   if (result == WIFI_SCAN_FAILED) {
     Serial.println("[WiFi] Failed to start async scan");
     logDebug("WiFi scan failed to start");
+    WiFi.scanDelete();
+    wifiScanStarted = false;
+    startBTAdvertising(); 
     return;
   }
 
-  wifiScanStarted = true;
-  wifiScanStartedAt = millis();
-  availableSSIDs.clear();
-  Serial.println("[WiFi] Async scan started");
-  logDebug("WiFi async scan started");
+  Serial.println("[WiFi] Async passive scan started");
+  logDebug("WiFi async passive scan started");
 }
 
 bool wifiScanComplete() {
@@ -70,63 +93,56 @@ void pollWiFiScan() {
 
   int n = WiFi.scanComplete();
   if (n == WIFI_SCAN_RUNNING) {
-    // Timeout guard — if scan runs >10s something is very wrong
-    if (millis() - wifiScanStartedAt > 10000) {
-      Serial.println("[WiFi] Scan timeout — deleting stale results");
-      logDebug("WiFi scan timeout after 10s");
+    // Timeout guard — if scan runs >15s something is very wrong
+    if (millis() - wifiScanStartedAt > 15000) {
+      Serial.println("[WiFi] Scan timeout — resetting");
+      logDebug("WiFi scan timeout after 15s");
       WiFi.scanDelete();
       wifiScanStarted = false;
+      startBTAdvertising();
     }
     return;
   }
 
-  // n == WIFI_SCAN_FAILED or >= 0: scan done
-  availableSSIDs.clear();
-  if (n > 0) {
-    for (int i = 0; i < n; i++) {
-      String ssid = WiFi.SSID(i);
-      int rssi = WiFi.RSSI(i);
-      availableSSIDs.push_back(ssid);
-      Serial.println("[WiFi] Found: " + ssid + " (" + String(rssi) + " dBm)");
-    }
+  // Scan finished (n >= 0 or n == WIFI_SCAN_FAILED)
+  if (n >= 0) {
+    Serial.println("[WiFi] Scan complete — found " + String(n) + " networks");
+    logDebug("WiFi scan done, found: " + String(n) + " networks");
   } else {
-    Serial.println("[WiFi] Scan complete — no networks found (n=" + String(n) + ")");
+    Serial.println("[WiFi] Scan failed");
+    logDebug("WiFi scan FAILED");
   }
-  logDebug("WiFi scan done, found: " + String(availableSSIDs.size()) + " networks");
-  WiFi.scanDelete();
+
+  // Resume Bluetooth after WiFi scan is complete
+  startBTAdvertising();
+  
+  // NOTE: We DON'T call WiFi.scanDelete() here anymore.
+  // We keep the results in the driver buffer so they can be read by the API.
+  // scanDelete() will be called at the START of the next scan.
   wifiScanStarted = false;
 }
 
-// ============================================================
-// Blocking scan — used during DuckyScript IF_PRESENT commands
-// ============================================================
 void scanWiFi() {
   Serial.println("[WiFi] Blocking scan (during script)...");
   logDebug("WiFi blocking scan started");
 
-  // DO NOT change WiFi mode — already in AP_STA
   WiFi.scanDelete();
-  int n = WiFi.scanNetworks(/*async=*/false, /*show_hidden=*/false);
+  int n = WiFi.scanNetworks(/*async=*/false);
 
-  availableSSIDs.clear();
   if (n == WIFI_SCAN_FAILED || n < 0) {
     Serial.println("[WiFi] Blocking scan failed");
     lastError = "WiFi scan failed";
     errorCount++;
-    logDebug("WiFi blocking scan FAILED (n=" + String(n) + ")");
     return;
   }
-  for (int i = 0; i < n; i++) {
-    availableSSIDs.push_back(WiFi.SSID(i));
-  }
-  WiFi.scanDelete();
   Serial.println("[WiFi] Blocking scan done, found " + String(n) + " networks.");
-  logDebug("WiFi blocking scan done, found: " + String(n));
 }
 
 bool isSSIDPresent(String ssid) {
-  for (String& s : availableSSIDs) {
-    if (s == ssid) return true;
+  int n = WiFi.scanComplete();
+  if (n <= 0) return false;
+  for (int i = 0; i < n; i++) {
+    if (WiFi.SSID(i) == ssid) return true;
   }
   return false;
 }
@@ -282,6 +298,29 @@ String getSavedWiFiCredentials() {
     return json;
 }
 
+std::vector<String> getSavedSSIDs() {
+    std::vector<String> ssids;
+    if (!sdCardPresent || !SD.exists("/wifi_creds.txt")) return ssids;
+    
+    File f = SD.open("/wifi_creds.txt");
+    if (!f) return ssids;
+    
+    while (f.available()) {
+        String line = f.readStringUntil('\n');
+        line.trim();
+        if (line.length() == 0) continue;
+        
+        int s1 = line.indexOf("SSID=\"");
+        int s2 = line.indexOf("\"", s1 + 6);
+        
+        if (s1 != -1 && s2 != -1) {
+            ssids.push_back(line.substring(s1 + 6, s2));
+        }
+    }
+    f.close();
+    return ssids;
+}
+
 void deleteWiFiCredential(String ssid) {
     if (!sdCardPresent || !SD.exists("/wifi_creds.txt")) return;
     
@@ -303,28 +342,51 @@ void deleteWiFiCredential(String ssid) {
 
 void processAutoConnect() {
     static unsigned long lastAutoAttempt = 0;
+    static bool scanTriggeredForAutoConnect = false;
+
     if (!autoConnectEnabled || scriptRunning || wifiJoining || WiFi.status() == WL_CONNECTED) return;
-    
-    // Attempt every 60 seconds
+
+    // Attempt cycle every 60 seconds
     if (millis() - lastAutoAttempt < 60000) return;
-    lastAutoAttempt = millis();
-    
-    Serial.println("[WiFi] Auto-connect: Searching for saved networks...");
-    scanWiFi();
-    
+
+    // Phase 1: trigger an async scan and wait for it to complete
+    if (!scanTriggeredForAutoConnect) {
+        // Only start a scan if one isn't already running
+        if (wifiScanComplete()) {
+            Serial.println("[WiFi] Auto-connect: Starting async scan for saved networks...");
+            logDebug("Auto-connect: triggering async WiFi scan");
+            startWiFiScan();
+            scanTriggeredForAutoConnect = true;
+        }
+        return; // Come back next loop tick
+    }
+
+    // Phase 2: scan still in progress — wait
+    if (!wifiScanComplete()) return;
+
+    // Phase 3: scan done — check results against saved credentials
+    scanTriggeredForAutoConnect = false;
+    lastAutoAttempt = millis(); // reset timer after full attempt
+
+    int n = WiFi.scanComplete();
+    if (n <= 0) {
+        Serial.println("[WiFi] Auto-connect: No networks found.");
+        return;
+    }
+
     String credsJson = getSavedWiFiCredentials();
-    // Simple manual parsing of the mini-JSON we just built
-    for (String ssid : availableSSIDs) {
-        if (credsJson.indexOf("\"ssid\":\"" + ssid + "\"") != -1) {
-            // Found a saved network that is currently visible
-            int start = credsJson.indexOf("\"ssid\":\"" + ssid + "\"");
+    for (int i = 0; i < n; i++) {
+        String netSSID = WiFi.SSID(i);
+        if (credsJson.indexOf("\"ssid\":\"" + netSSID + "\"") != -1) {
+            int start = credsJson.indexOf("\"ssid\":\"" + netSSID + "\"");
             int passStart = credsJson.indexOf("\"pass\":\"", start) + 8;
             int passEnd = credsJson.indexOf("\"", passStart);
             String pass = credsJson.substring(passStart, passEnd);
-            
-            Serial.println("[WiFi] Auto-connect: Found visible saved network " + ssid + ". Joining...");
-            joinWiFi(ssid, pass);
-            break; 
+
+            Serial.println("[WiFi] Auto-connect: Found visible saved network " + netSSID + ". Joining...");
+            logDebug("Auto-connect: joining " + netSSID);
+            joinWiFi(netSSID, pass);
+            break;
         }
     }
 }

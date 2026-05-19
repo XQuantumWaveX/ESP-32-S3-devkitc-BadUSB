@@ -1560,19 +1560,122 @@ function leaveInternet() {
 
 function scanNetworksForUI(btn) {
     btn.disabled = true;
+    btn.originalText = btn.textContent;
     btn.textContent = 'Starting Scan...';
     
     fetch('/api/scan-wifi').then(r => r.json()).then(res => {
         if (res.status === 'scanning') {
             btn.textContent = 'Scanning...';
+            const container = document.getElementById('wifiScanResults');
+            if (container) {
+                container.style.display = 'block';
+                container.innerHTML = '<div style="padding: 10px; text-align: center;">Scanning for networks...</div>';
+            }
             pollScanResults(btn);
         } else {
             btn.textContent = 'Scan Failed';
-            btn.disabled = false;
+            setTimeout(() => {
+                btn.textContent = btn.originalText;
+                btn.disabled = false;
+            }, 2000);
         }
     }).catch(() => {
-        btn.textContent = 'Scan WiFis';
-    }, 1000);
+        btn.textContent = 'Connection Error';
+        setTimeout(() => {
+            btn.textContent = btn.originalText;
+            btn.disabled = false;
+        }, 2000);
+    });
+}
+
+function pollScanResults(btn) {
+    fetch('/api/scan-results').then(r => r.json()).then(res => {
+        if (res.done) {
+            btn.disabled = false;
+            btn.textContent = btn.originalText;
+            displayScanResults(res.networks);
+        } else {
+            setTimeout(() => pollScanResults(btn), 1000);
+        }
+    }).catch(() => {
+        btn.disabled = false;
+        btn.textContent = btn.originalText;
+    });
+}
+
+function displayScanResults(networks) {
+    const container = document.getElementById('wifiScanResults');
+    if (!container) return;
+    
+    if (!networks || networks.length === 0) {
+        container.innerHTML = '<div style="padding: 10px; text-align: center;">No networks found</div>';
+        return;
+    }
+
+    // Sort by RSSI (strongest first)
+    networks.sort((a, b) => b.rssi - a.rssi);
+
+    // Group by SSID to detect Router/Repeater setups
+    const ssidGroups = {};
+    networks.forEach(n => {
+        const id = n.ssid || '[Hidden]';
+        if (!ssidGroups[id]) ssidGroups[id] = [];
+        ssidGroups[id].push(n);
+    });
+
+    let html = '';
+    networks.forEach(net => {
+        const ssid = net.ssid || '[Hidden]';
+        // If it's a saved network, show unlocked even if it has encryption, because we have the key
+        const lock = (net.saved || net.encryption === 7) ? '🔓' : '🔒'; 
+        
+        // Router/Repeater logic
+        let typeBadge = '';
+        if (ssidGroups[ssid].length > 1) {
+            // If multiple APs have same SSID, the strongest is usually the repeater/closest node
+            const strongestBssid = ssidGroups[ssid][0].bssid; // Sorted strongest first above
+            if (net.bssid === strongestBssid) {
+                typeBadge = '<span style="font-size: 9px; background: var(--primary); color: black; padding: 1px 4px; border-radius: 3px; margin-left: 5px; vertical-align: middle;">REPEATER/CLOSEST</span>';
+            } else {
+                typeBadge = '<span style="font-size: 9px; background: rgba(255,255,255,0.1); color: var(--text-muted); padding: 1px 4px; border-radius: 3px; margin-left: 5px; vertical-align: middle;">ROUTER/NODE</span>';
+            }
+        }
+
+        // Saved network badge
+        const savedBadge = net.saved ? '<span style="font-size: 9px; background: #4CAF50; color: white; padding: 1px 4px; border-radius: 3px; margin-left: 5px; vertical-align: middle;">SAVED</span>' : '';
+
+        html += `
+            <div class="file-item" onclick="selectWiFiNetwork('${ssid.replace(/'/g, "\\'")}')">
+                <div class="flex-row" style="justify-content: space-between; width: 100%;">
+                    <div class="flex-row" style="gap: 5px; overflow: hidden;">
+                        <span style="font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${ssid}</span>
+                        ${typeBadge}
+                        ${savedBadge}
+                    </div>
+                    <div class="flex-row" style="gap: 8px; font-size: 11px; color: var(--text-muted); flex-shrink: 0;">
+                        <span>${lock}</span>
+                        <span>${net.rssi} dBm</span>
+                        <span style="font-size: 9px; opacity: 0.5;">CH ${net.channel}</span>
+                    </div>
+                </div>
+            </div>`;
+    });
+    container.innerHTML = html;
+}
+
+function getSignalIcon(rssi) {
+    return ''; // Emoji removed as requested
+}
+
+function selectWiFiNetwork(ssid) {
+    const ssidInput = document.getElementById('wifiSSIDJoin');
+    const passInput = document.getElementById('wifiPasswordJoin');
+    if (ssidInput) {
+        ssidInput.value = ssid;
+        passInput.focus();
+        // Optional: scroll to inputs
+        ssidInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
 }
 
 // =========================================================

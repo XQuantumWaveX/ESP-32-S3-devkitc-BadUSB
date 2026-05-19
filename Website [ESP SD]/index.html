@@ -178,6 +178,10 @@
                             <input type="checkbox" id="saveCredToggle" onchange="toggleSaveOnConnect()"> Save credentials
                         </label>
                         <div id="wifiStatus" style="margin-top: 10px; font-size: 12px;">Status: Idle</div>
+                        <div class="flex-row" style="margin-top: 15px;">
+                            <button onclick="scanNetworksForUI(this)" style="width: 100%;">Scan Networks</button>
+                        </div>
+                        <div id="wifiScanResults" class="file-list" style="margin-top: 10px; display: none; max-height: 200px; overflow-y: auto;"></div>
                     </div>
 
                     <div class="setting-group">

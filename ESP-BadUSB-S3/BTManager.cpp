@@ -4,6 +4,7 @@
 
 BLEScan* pBLEScan;
 std::vector<String> foundBTDevices;
+static volatile bool btScanning = false;
 
 BLEServer *pServer = NULL;
 BLECharacteristic * pTxCharacteristic = NULL;
@@ -111,10 +112,16 @@ void stopBT() {
 void scanBT() {
     foundBTDevices.clear();
     Serial.println("Scanning for BT devices...");
+    btScanning = true;
     BLEScanResults* foundDevices = pBLEScan->start(5, false);
+    btScanning = false;
     Serial.print("BT Devices found: ");
     Serial.println(foundDevices->getCount());
     pBLEScan->clearResults();
+}
+
+bool btScanInProgress() {
+    return btScanning;
 }
 
 bool isBTDevicePresent(String name) {
@@ -126,4 +133,18 @@ bool isBTDevicePresent(String name) {
 
 int getBTClientCount() {
     return deviceConnected ? 1 : 0;
+}
+
+void stopBTAdvertising() {
+    if (pServer) {
+        BLEDevice::getAdvertising()->stop();
+        Serial.println("[BT] Advertising stopped");
+    }
+}
+
+void startBTAdvertising() {
+    if (pServer) {
+        BLEDevice::getAdvertising()->start();
+        Serial.println("[BT] Advertising started");
+    }
 }

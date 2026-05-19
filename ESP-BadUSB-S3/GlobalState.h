@@ -19,10 +19,15 @@ extern USBHIDKeyboard keyboard;
 extern Preferences preferences;
 extern ESPUSB USB;
 
+struct WiFiNetwork {
+  String ssid;
+  int rssi;
+  uint8_t encryptionType;
+};
+
 // WiFi & AP
 extern String ap_ssid;
 extern String ap_password;
-extern std::vector<String> availableSSIDs;
 extern int wifiScanTime;
 extern bool autoConnectEnabled;
 extern bool saveOnConnectEnabled;

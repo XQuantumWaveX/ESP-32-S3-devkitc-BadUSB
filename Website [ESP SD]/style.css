@@ -1386,3 +1386,17 @@ button.secondary:hover {
     opacity: 0.6;
 }
 
+#wifiScanResults {
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    padding: 5px;
+    margin-top: 10px;
+    transition: all 0.3s ease;
+}
+
+#wifiScanResults .file-item:hover {
+    background: rgba(76, 175, 80, 0.15);
+    border-color: var(--primary);
+}
+
